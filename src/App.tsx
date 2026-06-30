@@ -373,15 +373,15 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 pb-12 font-sans" id="app-root-container">
       {/* Navigation Header */}
-      <header className="bg-slate-900 text-white sticky top-0 z-40 border-b-4 border-blue-600 shadow-md">
+      <header className="bg-orange-950 text-white sticky top-0 z-40 border-b-4 border-orange-600 shadow-md">
         <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600 rounded flex items-center justify-center font-bold text-xl text-white">
+            <div className="w-10 h-10 bg-orange-600 rounded flex items-center justify-center font-bold text-xl text-white">
               P
             </div>
             <div>
               <h1 className="text-lg font-black tracking-tight uppercase">
-                ParkFlow <span className="text-blue-400">Pro</span>
+                ParkFlow <span className="text-orange-400">Pro</span>
               </h1>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Control de Parqueo Inteligente</p>
             </div>
