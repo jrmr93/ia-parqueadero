@@ -8,12 +8,26 @@ import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
 // Helper para obtener saldo de forma segura y tolerante a fallas en Node.js (entorno de compilación/Vite)
 async function getBalanceFromStorage(): Promise<number> {
-  const configPath = path.resolve(process.cwd(), "firebase-applet-config.json");
+  const configPaths = [
+    path.join(process.cwd(), "firebase-applet-config.json"),
+    path.join(__dirname, "firebase-applet-config.json"),
+    path.resolve(process.cwd(), "firebase-applet-config.json"),
+    "/firebase-applet-config.json"
+  ];
+  
+  let configPath = "";
+  for (const p of configPaths) {
+    if (fs.existsSync(p)) {
+      configPath = p;
+      break;
+    }
+  }
+
   let dbFirebase: any = null;
   let parsedState: any = null;
   let isFromFirestore = false;
 
-  if (fs.existsSync(configPath)) {
+  if (configPath) {
     try {
       const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const appFirebase = initializeApp(firebaseConfig);
@@ -58,9 +72,30 @@ async function getBalanceFromStorage(): Promise<number> {
     };
   }
 
+  // Función auxiliar para parsear timestamps de Firestore robustamente
+  const getMsFromTimestamp = (val: any): number => {
+    if (!val) return 0;
+    if (typeof val === "number") return val;
+    if (typeof val === "string") {
+      const parsed = Date.parse(val);
+      return isNaN(parsed) ? 0 : parsed;
+    }
+    if (typeof val.toMillis === "function") {
+      return val.toMillis();
+    }
+    if (typeof val.seconds === "number") {
+      return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1000000);
+    }
+    if (val instanceof Date) {
+      return val.getTime();
+    }
+    return 0;
+  };
+
   // Calcular catch-up de tiempo transcurrido en segundo plano
   if (parsedState.isActive && parsedState.currentSessionId && parsedState.lastSavedTime) {
-    const elapsedRealMs = Date.now() - parsedState.lastSavedTime;
+    const lastSavedMs = getMsFromTimestamp(parsedState.lastSavedTime);
+    const elapsedRealMs = Date.now() - lastSavedMs;
     if (elapsedRealMs > 0) {
       const speed = parsedState.speedMultiplier || 1;
       const simDeltaMs = elapsedRealMs * speed;
@@ -192,6 +227,7 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      allowedHosts: true,
     },
   };
 });

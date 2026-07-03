@@ -21,14 +21,27 @@ async function startServer() {
 
   // Cargar Configuración de Firebase con soporte tolerante a fallos
   let dbFirebase: any = null;
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  const configPaths = [
+    path.join(process.cwd(), "firebase-applet-config.json"),
+    path.join(__dirname, "firebase-applet-config.json"),
+    path.resolve(process.cwd(), "firebase-applet-config.json"),
+    "/firebase-applet-config.json"
+  ];
   
-  if (fs.existsSync(configPath)) {
+  let configPath = "";
+  for (const p of configPaths) {
+    if (fs.existsSync(p)) {
+      configPath = p;
+      break;
+    }
+  }
+  
+  if (configPath) {
     try {
       const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const appFirebase = initializeApp(firebaseConfig);
       dbFirebase = getFirestore(appFirebase, firebaseConfig.firestoreDatabaseId);
-      console.log("Firebase inicializado correctamente en el servidor.");
+      console.log(`Firebase inicializado correctamente en el servidor desde: ${configPath}`);
     } catch (e) {
       console.error("No se pudo cargar o parsear la configuración de Firebase:", e);
     }
@@ -79,9 +92,30 @@ async function startServer() {
       };
     }
 
+    // Función auxiliar para parsear timestamps de Firestore robustamente
+    const getMsFromTimestamp = (val: any): number => {
+      if (!val) return 0;
+      if (typeof val === "number") return val;
+      if (typeof val === "string") {
+        const parsed = Date.parse(val);
+        return isNaN(parsed) ? 0 : parsed;
+      }
+      if (typeof val.toMillis === "function") {
+        return val.toMillis();
+      }
+      if (typeof val.seconds === "number") {
+        return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1000000);
+      }
+      if (val instanceof Date) {
+        return val.getTime();
+      }
+      return 0;
+    };
+
     // 4. Procesar catch-up de tiempo transcurrido si está estacionado (isActive === true)
     if (parsedState.isActive && parsedState.currentSessionId && parsedState.lastSavedTime) {
-      const elapsedRealMs = Date.now() - parsedState.lastSavedTime;
+      const lastSavedMs = getMsFromTimestamp(parsedState.lastSavedTime);
+      const elapsedRealMs = Date.now() - lastSavedMs;
       if (elapsedRealMs > 0) {
         const speed = parsedState.speedMultiplier || 1;
         const simDeltaMs = elapsedRealMs * speed;
@@ -226,7 +260,10 @@ async function startServer() {
   // Servir frontend con Vite (Desarrollo) o archivos estáticos (Producción)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        allowedHosts: true,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

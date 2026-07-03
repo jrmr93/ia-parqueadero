@@ -60,9 +60,30 @@ export default function App() {
 
       const parsed = loadedState || DEFAULT_STATE;
 
+      // Helper to parse Firestore/LocalStorage timestamps robustly
+      const getMsFromTimestamp = (val: any): number => {
+        if (!val) return 0;
+        if (typeof val === "number") return val;
+        if (typeof val === "string") {
+          const p = Date.parse(val);
+          return isNaN(p) ? 0 : p;
+        }
+        if (typeof val.toMillis === "function") {
+          return val.toMillis();
+        }
+        if (typeof val.seconds === "number") {
+          return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1000000);
+        }
+        if (val instanceof Date) {
+          return val.getTime();
+        }
+        return 0;
+      };
+
       // Handle calculating elapsed time while app was inactive
       if (parsed.isActive && parsed.currentSessionId && parsed.lastSavedTime) {
-        const elapsedRealMs = Date.now() - parsed.lastSavedTime;
+        const lastSavedMs = getMsFromTimestamp(parsed.lastSavedTime);
+        const elapsedRealMs = Date.now() - lastSavedMs;
         if (elapsedRealMs > 0) {
           const simDeltaMs = elapsedRealMs * parsed.speedMultiplier;
           const RATE_PER_MS = 0.10 / (3600 * 1000); // $0.10 per hour
