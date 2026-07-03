@@ -9,7 +9,7 @@ import fs from "fs";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
 async function startServer() {
   const app = express();
@@ -36,45 +36,134 @@ async function startServer() {
     console.warn("ADVERTENCIA: firebase-applet-config.json no existe. El servidor funcionará en modo offline local.");
   }
 
-  // Helper para obtener saldo actual de Firestore (o usar valor de respaldo)
-  async function getBalance(): Promise<number> {
+  // Helper para obtener y sincronizar el estado/saldo actual de Firestore (o usar valor de respaldo)
+  async function getAndUpdateBalance(): Promise<number> {
+    let parsedState: any = null;
+    let isFromFirestore = false;
+
+    // 1. Intentar cargar desde Firestore
     if (dbFirebase) {
       try {
         const docRef = doc(dbFirebase, "parkingStates", "global");
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && typeof data.balance === "number") {
-            return data.balance;
-          }
+          parsedState = docSnap.data();
+          isFromFirestore = true;
         }
       } catch (err) {
-        console.error("Error al obtener saldo de Firestore:", err);
+        console.error("Error al obtener estado de Firestore:", err);
       }
     }
     
-    // Si no hay conexión o no hay firebaseConfig, intentamos leer de un respaldo local
+    // 2. Si no hay Firestore o falló, intentar desde el respaldo local
     const fallbackPath = path.join(process.cwd(), "local-parking-state.json");
-    if (fs.existsSync(fallbackPath)) {
+    if (!parsedState && fs.existsSync(fallbackPath)) {
       try {
         const raw = fs.readFileSync(fallbackPath, "utf8");
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed.balance === "number") {
-          return parsed.balance;
-        }
+        parsedState = JSON.parse(raw);
       } catch (e) {
-        // Ignorar error de parseo
+        console.error("Error al leer archivo local-parking-state.json:", e);
       }
     }
-    
-    // Por defecto si no hay nada
-    return 5.0;
+
+    // 3. Si no hay estado en ningún lado, usar valores por defecto
+    if (!parsedState) {
+      parsedState = {
+        balance: 5.0,
+        isActive: false,
+        currentSessionId: null,
+        history: [],
+        totalDeposits: 5.0,
+        totalSpent: 0,
+        speedMultiplier: 1,
+      };
+    }
+
+    // 4. Procesar catch-up de tiempo transcurrido si está estacionado (isActive === true)
+    if (parsedState.isActive && parsedState.currentSessionId && parsedState.lastSavedTime) {
+      const elapsedRealMs = Date.now() - parsedState.lastSavedTime;
+      if (elapsedRealMs > 0) {
+        const speed = parsedState.speedMultiplier || 1;
+        const simDeltaMs = elapsedRealMs * speed;
+        const RATE_PER_MS = 0.10 / (3600 * 1000); // $0.10 por hora
+        const offlineCost = simDeltaMs * RATE_PER_MS;
+
+        let finalState = { ...parsedState };
+
+        if (offlineCost >= parsedState.balance) {
+          const finalAffordableMs = parsedState.balance / RATE_PER_MS;
+          const updatedHistory = (parsedState.history || []).map((s: any) => {
+            if (s.id === parsedState.currentSessionId) {
+              return {
+                ...s,
+                endTime: s.startTime + s.elapsedTimeMs + finalAffordableMs,
+                elapsedTimeMs: s.elapsedTimeMs + finalAffordableMs,
+                cost: s.cost + parsedState.balance,
+                isActive: false,
+              };
+            }
+            return s;
+          });
+
+          finalState = {
+            ...parsedState,
+            balance: 0,
+            isActive: false,
+            currentSessionId: null,
+            history: updatedHistory,
+            totalSpent: (parsedState.totalSpent || 0) + parsedState.balance,
+            lastSavedTime: Date.now(),
+          };
+        } else {
+          const updatedHistory = (parsedState.history || []).map((s: any) => {
+            if (s.id === parsedState.currentSessionId) {
+              return {
+                ...s,
+                elapsedTimeMs: s.elapsedTimeMs + simDeltaMs,
+                cost: s.cost + offlineCost,
+              };
+            }
+            return s;
+          });
+
+          finalState = {
+            ...parsedState,
+            balance: parsedState.balance - offlineCost,
+            history: updatedHistory,
+            totalSpent: (parsedState.totalSpent || 0) + offlineCost,
+            lastSavedTime: Date.now(),
+          };
+        }
+
+        parsedState = finalState;
+
+        // 5. Guardar el estado actualizado de vuelta a la base de datos o archivo local
+        if (isFromFirestore && dbFirebase) {
+          try {
+            const docRef = doc(dbFirebase, "parkingStates", "global");
+            await setDoc(docRef, parsedState);
+            console.log("Estado de estacionamiento catch-up guardado en Firestore.");
+          } catch (err) {
+            console.error("Error al guardar estado catch-up en Firestore:", err);
+          }
+        }
+        
+        // Guardar siempre una copia local por seguridad
+        try {
+          fs.writeFileSync(fallbackPath, JSON.stringify(parsedState, null, 2), "utf8");
+        } catch (e) {
+          console.error("Error al guardar respaldo de estado local:", e);
+        }
+      }
+    }
+
+    return parsedState.balance;
   }
 
   // Endpoint 1: Retorna un JSON con el saldo y su formato (o texto plano si se especifica ?text=true)
   app.get("/saldo", async (req, res) => {
     try {
-      const balance = await getBalance();
+      const balance = await getAndUpdateBalance();
       if (req.query.text !== undefined) {
         res.setHeader("Content-Type", "text/plain");
         return res.status(200).send(balance.toFixed(4));
@@ -93,7 +182,7 @@ async function startServer() {
   // Endpoint 2: API estructurada en formato JSON
   app.get("/api/saldo", async (req, res) => {
     try {
-      const balance = await getBalance();
+      const balance = await getAndUpdateBalance();
       res.status(200).json({ 
         balance: parseFloat(balance.toFixed(4)), 
         formatted: `$${balance.toFixed(4)}`,
@@ -112,7 +201,7 @@ async function startServer() {
 
     if (req.query.saldo !== undefined || req.query.json !== undefined || req.headers.accept === "application/json" || isCommandLine) {
       try {
-        const balance = await getBalance();
+        const balance = await getAndUpdateBalance();
         
         // Si es curl/wget y no pide explícitamente JSON, devolvemos texto plano para comodidad en terminal
         if (isCommandLine && req.query.json === undefined && req.headers.accept !== "application/json") {
