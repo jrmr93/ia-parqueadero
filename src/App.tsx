@@ -9,35 +9,26 @@ import WalletCard from "./components/WalletCard";
 import ParkingBay from "./components/ParkingBay";
 import ParkingControls from "./components/ParkingControls";
 import ParkingHistory from "./components/ParkingHistory";
-import SimulatorPanel from "./components/SimulatorPanel";
-import { Car, AlertTriangle, CheckCircle2, Cloud, CloudOff, Zap, ZapOff } from "lucide-react";
+import { Car, AlertTriangle, CheckCircle2, Cloud, CloudOff } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { saveParkingStateToDb, loadParkingStateFromDb, subscribeParkingState } from "./lib/db";
 
 const DEFAULT_STATE: ParkingState = {
-  balance: 5.0, // Preload with $5.00 for immediate testing
+  balance: 0.0, // Default to $0.00
   isActive: false,
   currentSessionId: null,
   history: [],
-  totalDeposits: 5.0,
+  totalDeposits: 0.0,
   totalSpent: 0,
   speedMultiplier: 1,
 };
 
 export default function App() {
   const [state, setState] = useState<ParkingState>(DEFAULT_STATE);
-  const [isSimulatorVisible, setIsSimulatorVisible] = useState<boolean>(() => {
-    const saved = localStorage.getItem("parking_manager_simulator_visible");
-    return saved !== null ? saved === "true" : false;
-  });
   const [showEmptyAlert, setShowEmptyAlert] = useState<boolean>(false);
   const [dbSynced, setDbSynced] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const lastUpdatedRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    localStorage.setItem("parking_manager_simulator_visible", String(isSimulatorVisible));
-  }, [isSimulatorVisible]);
 
   // Initialize/Load state from database once on mount
   useEffect(() => {
@@ -374,11 +365,11 @@ export default function App() {
 
   const handleClearHistory = () => {
     const newState = {
-      balance: 5.0,
+      balance: 0.0,
       isActive: false,
       currentSessionId: null,
       history: [],
-      totalDeposits: 5.0,
+      totalDeposits: 0.0,
       totalSpent: 0,
       speedMultiplier: 1,
     };
@@ -420,24 +411,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            <button
-              id="btn-toggle-simulator"
-              onClick={() => setIsSimulatorVisible(!isSimulatorVisible)}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-750 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 shadow-xs text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
-            >
-              {isSimulatorVisible ? (
-                <>
-                  <ZapOff className="w-4 h-4 text-amber-500 shrink-0" />
-                  Ocultar Simulador
-                </>
-              ) : (
-                <>
-                  <Zap className="w-4 h-4 text-blue-400 animate-pulse shrink-0" />
-                  Mostrar Simulador
-                </>
-              )}
-            </button>
-
             <div className="flex items-center gap-2.5 px-4 py-2 bg-slate-800 rounded-xl border border-slate-700 shadow-sm text-left">
               <div className={`p-1.5 rounded-lg ${dbSynced ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}>
                 {dbSynced ? <Cloud className="w-4 h-4 animate-pulse" /> : <CloudOff className="w-4 h-4" />}
@@ -503,27 +476,6 @@ export default function App() {
 
 
         </div>
-
-        {/* Simulator Panel (Optional / Persistent show/hide) */}
-        <AnimatePresence initial={false}>
-          {isSimulatorVisible && (
-            <motion.div
-              initial={{ opacity: 0, height: 0, y: -10 }}
-              animate={{ opacity: 1, height: "auto", y: 0 }}
-              exit={{ opacity: 0, height: 0, y: -10 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-              className="w-full overflow-hidden"
-              id="simulation-section-container"
-            >
-              <SimulatorPanel
-                isActive={state.isActive}
-                speedMultiplier={state.speedMultiplier}
-                onSetSpeed={handleSetSpeed}
-                onTimeSkip={handleTimeSkip}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* Parking History and Stats Logs */}
         <div className="w-full">
