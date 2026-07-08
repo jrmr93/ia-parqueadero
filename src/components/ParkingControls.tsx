@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from "react";
-import { Play, Square, LogIn, LogOut, ArrowRight, ShieldCheck, History, AlertTriangle, Clock } from "lucide-react";
+import React, { useState } from "react";
+import { Play, Square, LogIn, LogOut, ArrowRight, ShieldCheck, History, AlertTriangle, Clock, Edit2, Check, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface ParkingControlsProps {
@@ -15,6 +15,8 @@ interface ParkingControlsProps {
   formattedTime: string;
   currentCost: number;
   startTime: number | null;
+  hourlyRate: number;
+  onUpdateHourlyRate: (rate: number) => void;
 }
 
 export default function ParkingControls({
@@ -25,11 +27,34 @@ export default function ParkingControls({
   formattedTime,
   currentCost,
   startTime,
+  hourlyRate,
+  onUpdateHourlyRate,
 }: ParkingControlsProps) {
   
   const [showConfirmStart, setShowConfirmStart] = useState(false);
   const [showConfirmPause, setShowConfirmPause] = useState(false);
+  const [isEditingRate, setIsEditingRate] = useState(false);
+  const [tempRate, setTempRate] = useState(hourlyRate.toString());
   const hasNoBalance = balance <= 0;
+
+  const parsedRate = parseFloat(tempRate);
+  const isValidRate = !isNaN(parsedRate) && parsedRate > 0 && parsedRate <= 100;
+
+  const handleSaveRate = () => {
+    if (isValidRate) {
+      onUpdateHourlyRate(parsedRate);
+      setIsEditingRate(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && isValidRate) {
+      handleSaveRate();
+    } else if (e.key === "Escape") {
+      setIsEditingRate(false);
+      setTempRate(hourlyRate.toString());
+    }
+  };
 
   // Format real clock time for the start timestamp
   const formatStartTime = (timestamp: number | null) => {
@@ -59,11 +84,65 @@ export default function ParkingControls({
         <div className="bg-slate-50 border border-slate-200/60 rounded-xl p-4 mb-5 text-xs text-slate-600 space-y-2">
           <div className="flex justify-between items-center pb-2 border-b border-slate-200/40">
             <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Tarifa por hora:</span>
-            <span className="font-bold text-slate-800">$0.10 USD / hora</span>
+            {isEditingRate ? (
+              <div className="flex items-center gap-1" id="hourly-rate-edit-wrapper">
+                <span className="text-slate-400 font-bold font-mono">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max="100.00"
+                  value={tempRate}
+                  onChange={(e) => setTempRate(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  className="w-16 px-1 py-0.5 text-xs font-bold font-mono text-slate-800 bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  id="input-hourly-rate"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  id="btn-save-rate"
+                  onClick={handleSaveRate}
+                  disabled={!isValidRate}
+                  className={`p-1 rounded cursor-pointer transition-colors ${isValidRate ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}
+                  title="Guardar y reiniciar aplicación"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  id="btn-cancel-rate"
+                  onClick={() => {
+                    setIsEditingRate(false);
+                    setTempRate(hourlyRate.toString());
+                  }}
+                  className="p-1 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded cursor-pointer transition-colors"
+                  title="Cancelar"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                <span className="font-bold text-slate-800">${hourlyRate.toFixed(2)} USD / hora</span>
+                <button
+                  type="button"
+                  id="btn-edit-rate"
+                  onClick={() => {
+                    setTempRate(hourlyRate.toString());
+                    setIsEditingRate(true);
+                  }}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                  title="Editar tarifa"
+                >
+                  <Edit2 className="w-3 h-3" />
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex justify-between items-center pb-2 border-b border-slate-200/40">
             <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Tarifa por minuto:</span>
-            <span className="font-mono text-slate-700 font-bold">$0.00167 USD / min</span>
+            <span className="font-mono text-slate-700 font-bold">${(hourlyRate / 60).toFixed(5)} USD / min</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Pausa permitida:</span>

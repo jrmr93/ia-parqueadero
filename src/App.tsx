@@ -22,6 +22,7 @@ const DEFAULT_STATE: ParkingState = {
   totalDeposits: 0.0,
   totalSpent: 0,
   speedMultiplier: 1,
+  hourlyRate: 0.10,
 };
 
 export default function App() {
@@ -94,7 +95,7 @@ export default function App() {
         const elapsedRealMs = Date.now() - lastSavedMs;
         if (elapsedRealMs > 0) {
           const simDeltaMs = elapsedRealMs * parsed.speedMultiplier;
-          const RATE_PER_MS = 0.10 / (3600 * 1000); // $0.10 per hour
+          const RATE_PER_MS = (parsed.hourlyRate ?? 0.10) / (3600 * 1000); // custom hourly cost
           const offlineCost = simDeltaMs * RATE_PER_MS;
 
           const updatedHistory = parsed.history.map((s) => {
@@ -207,7 +208,7 @@ export default function App() {
       lastUpdatedRef.current = now;
 
       const simDeltaMs = realDeltaMs * state.speedMultiplier;
-      const RATE_PER_MS = 0.10 / (3600 * 1000);
+      const RATE_PER_MS = (state.hourlyRate ?? 0.10) / (3600 * 1000);
       const tickCost = simDeltaMs * RATE_PER_MS;
 
       setState((prev) => {
@@ -346,7 +347,7 @@ export default function App() {
 
   const handleTimeSkip = (minutes: number) => {
     const skipMs = minutes * 60 * 1000;
-    const RATE_PER_MS = 0.10 / (3600 * 1000);
+    const RATE_PER_MS = (state.hourlyRate ?? 0.10) / (3600 * 1000);
     const skipCost = skipMs * RATE_PER_MS;
 
     if (!state.isActive || !state.currentSessionId) return;
@@ -381,6 +382,22 @@ export default function App() {
       totalDeposits: 0.0,
       totalSpent: 0,
       speedMultiplier: 1,
+      hourlyRate: state.hourlyRate ?? 0.10,
+    };
+    updateAndSaveState(newState);
+    localStorage.removeItem("parking_manager_state");
+  };
+
+  const handleUpdateHourlyRate = (newRate: number) => {
+    const newState = {
+      balance: 0.0,
+      isActive: false,
+      currentSessionId: null,
+      history: [],
+      totalDeposits: 0.0,
+      totalSpent: 0,
+      speedMultiplier: 1,
+      hourlyRate: newRate,
     };
     updateAndSaveState(newState);
     localStorage.removeItem("parking_manager_state");
@@ -497,6 +514,8 @@ export default function App() {
               formattedTime={getFormattedTime(currentDuration)}
               currentCost={currentCost}
               startTime={activeSession?.startTime ?? null}
+              hourlyRate={state.hourlyRate ?? 0.10}
+              onUpdateHourlyRate={handleUpdateHourlyRate}
             />
           </div>
 

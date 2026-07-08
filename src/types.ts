@@ -21,4 +21,5 @@ export interface ParkingState {
   totalSpent: number; // total amount spent on finished sessions + current session
   speedMultiplier: number; // speed coefficient (e.g., 1x, 10x, 60x, 3600x)
   lastSavedTime?: number; // timestamp of last save for catching up offline elapsed time
+  hourlyRate?: number; // hourly cost in USD, defaults to 0.10
 }
