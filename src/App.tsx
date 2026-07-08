@@ -28,7 +28,7 @@ export default function App() {
   const [state, setState] = useState<ParkingState>(DEFAULT_STATE);
   const [isSimulatorVisible, setIsSimulatorVisible] = useState<boolean>(() => {
     const saved = localStorage.getItem("parking_manager_simulator_visible");
-    return saved !== null ? saved === "true" : true;
+    return saved !== null ? saved === "true" : false;
   });
   const [showEmptyAlert, setShowEmptyAlert] = useState<boolean>(false);
   const [dbSynced, setDbSynced] = useState<boolean>(false);
