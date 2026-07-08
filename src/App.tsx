@@ -490,6 +490,7 @@ export default function App() {
               balance={state.balance}
               onRecharge={handleRecharge}
               onResetBalance={handleResetBalance}
+              hourlyRate={state.hourlyRate ?? 0.10}
             />
           </div>
 

@@ -11,9 +11,10 @@ interface WalletCardProps {
   balance: number;
   onRecharge: (amount: number) => void;
   onResetBalance: () => void;
+  hourlyRate?: number;
 }
 
-export default function WalletCard({ balance, onRecharge, onResetBalance }: WalletCardProps) {
+export default function WalletCard({ balance, onRecharge, onResetBalance, hourlyRate = 0.10 }: WalletCardProps) {
   const [customAmount, setCustomAmount] = useState<string>("");
   const [notification, setNotification] = useState<string | null>(null);
   const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
@@ -50,8 +51,8 @@ export default function WalletCard({ balance, onRecharge, onResetBalance }: Wall
   };
 
   // Calculate remaining parking time
-  // Rate: $0.10 per hour
-  const ratePerHour = 0.1;
+  // Rate: custom hourly rate
+  const ratePerHour = hourlyRate;
   const totalHoursLeft = balance / ratePerHour;
   const days = Math.floor(totalHoursLeft / 24);
   const hours = Math.floor(totalHoursLeft % 24);
@@ -66,7 +67,7 @@ export default function WalletCard({ balance, onRecharge, onResetBalance }: Wall
     return parts.join(" ");
   };
 
-  const isLowBalance = balance > 0 && balance < 0.1; // less than 1 hour left
+  const isLowBalance = balance > 0 && balance < hourlyRate; // less than 1 hour left
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 flex flex-col justify-between h-full relative overflow-hidden" id="wallet-card-container">
@@ -81,7 +82,7 @@ export default function WalletCard({ balance, onRecharge, onResetBalance }: Wall
             </div>
             <h2 className="text-sm font-bold text-slate-700 tracking-wider uppercase">Mi Monedero Digital</h2>
           </div>
-          <span className="text-xs font-mono text-slate-400">Tarifa: $0.10/h</span>
+          <span className="text-xs font-mono text-slate-400">Tarifa: ${hourlyRate.toFixed(2)}/h</span>
         </div>
 
         {/* Balance Display */}
