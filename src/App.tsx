@@ -67,7 +67,11 @@ export default function App() {
         }
       }
 
-      const parsed = loadedState || DEFAULT_STATE;
+      const parsed: ParkingState = {
+        ...DEFAULT_STATE,
+        ...(loadedState || {}),
+        history: (loadedState || {}).history || DEFAULT_STATE.history,
+      };
 
       // Helper to parse Firestore/LocalStorage timestamps robustly
       const getMsFromTimestamp = (val: any): number => {
@@ -135,26 +139,32 @@ export default function App() {
         const remoteSavedTime = remoteState.lastSavedTime || 0;
         const currentSavedTime = current.lastSavedTime || 0;
 
+        // Ensure remote state has all required keys from DEFAULT_STATE
+        const fullyParsedRemote: ParkingState = {
+          ...DEFAULT_STATE,
+          ...remoteState,
+        };
+
         // Only overwrite current state if the update was made externally
         // (lastSavedTime is strictly newer by more than a brief network lag)
         // or if there are important structural differences
         const hasStructuralDiff = 
-          remoteState.isActive !== current.isActive || 
-          remoteState.currentSessionId !== current.currentSessionId ||
-          remoteState.hourlyRate !== current.hourlyRate ||
-          Math.abs(remoteState.balance - current.balance) > 0.01;
+          fullyParsedRemote.isActive !== current.isActive || 
+          fullyParsedRemote.currentSessionId !== current.currentSessionId ||
+          fullyParsedRemote.hourlyRate !== current.hourlyRate ||
+          Math.abs(fullyParsedRemote.balance - current.balance) > 0.01;
 
         if (hasStructuralDiff || remoteSavedTime > currentSavedTime + 1000) {
           // Reset local timer reference if active state is updated
-          if (remoteState.isActive) {
+          if (fullyParsedRemote.isActive) {
             lastUpdatedRef.current = Date.now();
           } else {
             lastUpdatedRef.current = null;
           }
 
           // Also update localStorage
-          localStorage.setItem("parking_manager_state", JSON.stringify(remoteState));
-          return remoteState;
+          localStorage.setItem("parking_manager_state", JSON.stringify(fullyParsedRemote));
+          return fullyParsedRemote;
         }
         return current;
       });

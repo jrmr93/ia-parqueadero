@@ -37,6 +37,11 @@ export default function ParkingControls({
   const [tempRate, setTempRate] = useState(hourlyRate.toString());
   const hasNoBalance = balance <= 0;
 
+  // Synchronize tempRate if hourlyRate changes externally
+  React.useEffect(() => {
+    setTempRate(hourlyRate.toString());
+  }, [hourlyRate]);
+
   const parsedRate = parseFloat(tempRate);
   const isValidRate = !isNaN(parsedRate) && parsedRate > 0 && parsedRate <= 100;
 
@@ -95,6 +100,7 @@ export default function ParkingControls({
                   value={tempRate}
                   onChange={(e) => setTempRate(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onBlur={handleSaveRate}
                   className="w-16 px-1 py-0.5 text-xs font-bold font-mono text-slate-800 bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                   id="input-hourly-rate"
                   autoFocus
