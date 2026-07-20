@@ -6,6 +6,8 @@ import {defineConfig} from 'vite';
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 // Helper para obtener saldo de forma segura y tolerante a fallas en Node.js (entorno de compilación/Vite)
 async function getBalanceFromStorage(): Promise<number> {
   const configPaths = [
@@ -174,48 +176,44 @@ async function getBalanceFromStorage(): Promise<number> {
 
 export default defineConfig(() => {
   return {
-    plugins: [
-      react(), 
-      tailwindcss(),
-      {
-        name: 'saldo-dev-middleware',
-        configureServer(server) {
-          server.middlewares.use(async (req, res, next) => {
-            const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-            
-            // Interceptar /saldo y /api/saldo en el servidor de desarrollo de Vite
-            if (url.pathname === '/saldo' || url.pathname === '/api/saldo') {
-              try {
-                const balance = await getBalanceFromStorage();
-                
-                // Si piden ?text=true o es /saldo con el parámetro text, retornar texto plano
-                if (url.searchParams.has('text') && url.pathname === '/saldo') {
-                  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                  res.end(balance.toFixed(4));
-                  return;
-                }
-
-                // De lo contrario, retornar siempre JSON estructurado
-                res.setHeader('Content-Type', 'application/json; charset=utf-8');
-                res.setHeader('Access-Control-Allow-Origin', '*'); // Permitir CORS
-                res.end(JSON.stringify({
-                  balance: parseFloat(balance.toFixed(4)),
-                  formatted: `$${balance.toFixed(4)}`,
-                  status: "success",
-                  timestamp: Date.now()
-                }));
-              } catch (e) {
-                res.statusCode = 500;
-                res.setHeader('Content-Type', 'application/json; charset=utf-8');
-                res.end(JSON.stringify({ error: "Error al obtener el saldo", status: "error" }));
+    plugins: [react(), tailwindcss(), {
+      name: 'saldo-dev-middleware',
+      configureServer(server) {
+        server.middlewares.use(async (req, res, next) => {
+          const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          
+          // Interceptar /saldo y /api/saldo en el servidor de desarrollo de Vite
+          if (url.pathname === '/saldo' || url.pathname === '/api/saldo') {
+            try {
+              const balance = await getBalanceFromStorage();
+              
+              // Si piden ?text=true o es /saldo con el parámetro text, retornar texto plano
+              if (url.searchParams.has('text') && url.pathname === '/saldo') {
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                res.end(balance.toFixed(4));
+                return;
               }
-              return;
+
+              // De lo contrario, retornar siempre JSON estructurado
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.setHeader('Access-Control-Allow-Origin', '*'); // Permitir CORS
+              res.end(JSON.stringify({
+                balance: parseFloat(balance.toFixed(4)),
+                formatted: `$${balance.toFixed(4)}`,
+                status: "success",
+                timestamp: Date.now()
+              }));
+            } catch (e) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.end(JSON.stringify({ error: "Error al obtener el saldo", status: "error" }));
             }
-            next();
-          });
-        }
+            return;
+          }
+          next();
+        });
       }
-    ],
+    }, cloudflare()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
