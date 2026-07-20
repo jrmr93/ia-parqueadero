@@ -56,10 +56,10 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
  * To optimize performance and quotas, this is called during significant events
  * (start, pause, recharge, reset, etc.) and not on every tick.
  */
-export async function saveParkingStateToDb(state: ParkingState): Promise<void> {
-  const path = "parkingStates/global";
+export async function saveParkingStateToDb(state: ParkingState, userId: string = "global"): Promise<void> {
+  const path = `parkingStates/${userId}`;
   try {
-    const userDocRef = doc(db, "parkingStates", "global");
+    const userDocRef = doc(db, "parkingStates", userId);
     const dataToSave = {
       ...state,
       lastSavedTime: Date.now(),
@@ -73,10 +73,10 @@ export async function saveParkingStateToDb(state: ParkingState): Promise<void> {
 /**
  * Loads the parking state from Firestore.
  */
-export async function loadParkingStateFromDb(): Promise<ParkingState | null> {
-  const path = "parkingStates/global";
+export async function loadParkingStateFromDb(userId: string = "global"): Promise<ParkingState | null> {
+  const path = `parkingStates/${userId}`;
   try {
-    const userDocRef = doc(db, "parkingStates", "global");
+    const userDocRef = doc(db, "parkingStates", userId);
     const docSnap = await getDoc(userDocRef);
     if (docSnap.exists()) {
       return docSnap.data() as ParkingState;
@@ -90,8 +90,8 @@ export async function loadParkingStateFromDb(): Promise<ParkingState | null> {
 /**
  * Subscribes to real-time changes of the parking state in Firestore.
  */
-export function subscribeParkingState(callback: (state: ParkingState) => void): () => void {
-  const userDocRef = doc(db, "parkingStates", "global");
+export function subscribeParkingState(userId: string = "global", callback: (state: ParkingState) => void): () => void {
+  const userDocRef = doc(db, "parkingStates", userId);
   return onSnapshot(userDocRef, (snapshot) => {
     if (snapshot.exists()) {
       callback(snapshot.data() as ParkingState);
