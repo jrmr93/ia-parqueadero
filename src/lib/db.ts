@@ -33,71 +33,124 @@ export interface FirestoreErrorInfo {
   };
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: null,
-      email: null,
-      emailVerified: null,
-      isAnonymous: null,
-      tenantId: null,
-      providerInfo: [],
-    },
-    operationType,
-    path,
-  };
-  console.error("Firestore Error: ", JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
 /**
- * Saves the current parking state to Firestore.
- * To optimize performance and quotas, this is called during significant events
- * (start, pause, recharge, reset, etc.) and not on every tick.
+ * Guarda el estado del parqueo en el servidor local centralizado (y en Firestore como réplica si está disponible).
  */
 export async function saveParkingStateToDb(state: ParkingState): Promise<void> {
-  const path = "parkingStates/global";
+  const dataToSave = {
+    ...state,
+    lastSavedTime: Date.now(),
+  };
+
+  // 1. Guardar de forma primaria en el servidor local centralizado
+  try {
+    const res = await fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dataToSave),
+    });
+    if (res.ok) {
+      return;
+    }
+  } catch (e) {
+    console.warn("Aviso: No se pudo contactar la API local del servidor, procediendo con réplica:", e);
+  }
+
+  // 2. Réplica o respaldo secundario en Firestore (si está configurado)
   try {
     const userDocRef = doc(db, "parkingStates", "global");
-    const dataToSave = {
-      ...state,
-      lastSavedTime: Date.now(),
-    };
     await setDoc(userDocRef, dataToSave);
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
+    // Si no hay Firestore disponible, el estado ya se guarda en localStorage en App.tsx
+    console.warn("Aviso: Réplica secundaria Firestore no disponible:", error);
   }
 }
 
 /**
- * Loads the parking state from Firestore.
+ * Carga el estado inicial del parqueo desde el servidor central local o Firestore.
  */
 export async function loadParkingStateFromDb(): Promise<ParkingState | null> {
-  const path = "parkingStates/global";
+  // 1. Intentar cargar desde el servidor local centralizado
+  try {
+    const res = await fetch("/api/state");
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.data) {
+        return json.data as ParkingState;
+      }
+    }
+  } catch (e) {
+    console.warn("Aviso: Servidor local no respondió a /api/state, intentando Firestore:", e);
+  }
+
+  // 2. Intentar cargar desde Firestore si la API local no respondió
   try {
     const userDocRef = doc(db, "parkingStates", "global");
     const docSnap = await getDoc(userDocRef);
     if (docSnap.exists()) {
       return docSnap.data() as ParkingState;
     }
-    return null;
   } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
+    console.warn("Aviso: Consulta a Firestore no disponible:", error);
   }
+
+  return null;
 }
 
 /**
- * Subscribes to real-time changes of the parking state in Firestore.
+ * Suscribe a cambios en tiempo real desde el servidor local central (Server-Sent Events)
+ * con fallback continuo a Firestore snapshot listener.
  */
 export function subscribeParkingState(callback: (state: ParkingState) => void): () => void {
-  const userDocRef = doc(db, "parkingStates", "global");
-  return onSnapshot(userDocRef, (snapshot) => {
-    if (snapshot.exists()) {
-      callback(snapshot.data() as ParkingState);
-    }
-  }, (error) => {
-    console.error("Firestore Subscribe Error:", error);
-  });
-}
+  let eventSource: EventSource | null = null;
+  let firestoreUnsub: (() => void) | null = null;
+  let isClosed = false;
 
+  // 1. Canal primario: Server-Sent Events desde el servidor local
+  try {
+    eventSource = new EventSource("/api/events");
+    eventSource.onmessage = (event) => {
+      if (isClosed) return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data && typeof data === "object") {
+          callback(data as ParkingState);
+        }
+      } catch (err) {
+        console.error("Error al procesar evento SSE:", err);
+      }
+    };
+    eventSource.onerror = () => {
+      // EventSource reconecta automáticamente de forma nativa
+    };
+  } catch (err) {
+    console.warn("Aviso: EventSource no disponible o falló conexión:", err);
+  }
+
+  // 2. Canal secundario: Firestore listener en tiempo real
+  try {
+    const userDocRef = doc(db, "parkingStates", "global");
+    firestoreUnsub = onSnapshot(userDocRef, (snapshot) => {
+      if (isClosed) return;
+      if (snapshot.exists()) {
+        callback(snapshot.data() as ParkingState);
+      }
+    }, () => {
+      // Ignorar silenciosamente errores de red externa para funcionamiento local offline
+    });
+  } catch {
+    // Si Firebase no está configurado, la app sigue funcionando con SSE
+  }
+
+  return () => {
+    isClosed = true;
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    if (firestoreUnsub) {
+      firestoreUnsub();
+      firestoreUnsub = null;
+    }
+  };
+}

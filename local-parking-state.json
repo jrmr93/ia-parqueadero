@@ -1,0 +1,22 @@
+{
+  "totalDeposits": 15.05,
+  "history": [
+    {
+      "startBalance": 11.8,
+      "startTime": 1791097889635,
+      "endTime": null,
+      "cost": 0.05,
+      "isActive": true,
+      "elapsedTimeMs": 223062,
+      "id": "session-1791097889635"
+    }
+  ],
+  "halfHourRate": 0.05,
+  "balance": 15,
+  "speedMultiplier": 1,
+  "lastSavedTime": 1791098112698,
+  "hourlyRate": 0.05,
+  "totalSpent": 0.05,
+  "isActive": true,
+  "currentSessionId": "session-1791097889635"
+}

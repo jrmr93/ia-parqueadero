@@ -10,7 +10,7 @@ import ParkingBay from "./components/ParkingBay";
 import ParkingControls from "./components/ParkingControls";
 import ParkingHistory from "./components/ParkingHistory";
 import SimulatorPanel from "./components/SimulatorPanel";
-import { Car, AlertTriangle, CheckCircle2, Cloud, CloudOff, Zap, ZapOff } from "lucide-react";
+import { Car, AlertTriangle, CheckCircle2, Server, CloudOff, Zap, ZapOff } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { saveParkingStateToDb, loadParkingStateFromDb, subscribeParkingState } from "./lib/db";
 
@@ -524,7 +524,7 @@ export default function App() {
 
             <div className="flex items-center gap-2.5 px-4 py-2 bg-slate-800 rounded-xl border border-slate-700 shadow-sm text-left">
               <div className={`p-1.5 rounded-lg ${dbSynced ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}>
-                {dbSynced ? <Cloud className="w-4 h-4 animate-pulse" /> : <CloudOff className="w-4 h-4" />}
+                {dbSynced ? <Server className="w-4 h-4 animate-pulse" /> : <CloudOff className="w-4 h-4" />}
               </div>
               <div className="text-xs">
                 <div className="font-bold flex items-center gap-1.5">
@@ -537,7 +537,7 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-400 mt-0.5">
-                  Base de Datos Única Activa
+                  Base de Datos Central Local
                 </p>
               </div>
             </div>

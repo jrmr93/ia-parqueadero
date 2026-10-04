@@ -19,9 +19,75 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Habilitar CORS para permitir peticiones desde cualquier origen (local u otros servidores)
+  // Habilitar CORS para permitir peticiones desde cualquier origen (red local u otros clientes)
   app.use(cors());
   app.use(express.json());
+
+  // Almacenamiento local centralizado en disco
+  const DATA_DIR = path.join(process.cwd(), "data");
+  if (!fs.existsSync(DATA_DIR)) {
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    } catch (e) {
+      console.error("Error al crear carpeta data local:", e);
+    }
+  }
+  const PRIMARY_LOCAL_FILE = path.join(DATA_DIR, "parking-state.json");
+  const ROOT_FALLBACK_FILE = path.join(process.cwd(), "local-parking-state.json");
+
+  // Función para guardar el estado local de forma atómica y segura contra cortes de energía
+  function saveLocalStateAtomically(state: any) {
+    const jsonStr = JSON.stringify(state, null, 2);
+    const tempFile = path.join(DATA_DIR, `parking-state.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
+    try {
+      fs.writeFileSync(tempFile, jsonStr, "utf8");
+      fs.renameSync(tempFile, PRIMARY_LOCAL_FILE);
+    } catch {
+      // Si falla renameSync (por ejemplo en sistemas de archivos específicos), escribir directo
+      try {
+        fs.writeFileSync(PRIMARY_LOCAL_FILE, jsonStr, "utf8");
+      } catch (err) {
+        console.error("Error al escribir PRIMARY_LOCAL_FILE:", err);
+      }
+    }
+
+    // Mantener también el respaldo en la raíz por compatibilidad
+    try {
+      fs.writeFileSync(ROOT_FALLBACK_FILE, jsonStr, "utf8");
+    } catch {}
+  }
+
+  // Función para leer el estado local persistido
+  function loadLocalState(): any | null {
+    for (const filePath of [PRIMARY_LOCAL_FILE, ROOT_FALLBACK_FILE]) {
+      if (fs.existsSync(filePath)) {
+        try {
+          const raw = fs.readFileSync(filePath, "utf8");
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") {
+            return parsed;
+          }
+        } catch (e) {
+          console.error(`Error al leer archivo ${filePath}:`, e);
+        }
+      }
+    }
+    return null;
+  }
+
+  // Clientes conectados por Server-Sent Events (SSE) para sincronización en tiempo real
+  const sseClients = new Set<express.Response>();
+
+  function broadcastState(state: any) {
+    const dataString = `data: ${JSON.stringify(state)}\n\n`;
+    for (const client of sseClients) {
+      try {
+        client.write(dataString);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }
 
   // Cargar Configuración de Firebase con soporte tolerante a fallos
   let dbFirebase: any = null;
@@ -45,87 +111,78 @@ async function startServer() {
       const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const appFirebase = initializeApp(firebaseConfig);
       dbFirebase = getFirestore(appFirebase, firebaseConfig.firestoreDatabaseId);
-      console.log(`Firebase inicializado correctamente en el servidor desde: ${configPath}`);
+      console.log(`Firebase inicializado como réplica en la nube desde: ${configPath}`);
     } catch (e) {
-      console.error("No se pudo cargar o parsear la configuración de Firebase:", e);
+      console.warn("Firebase no disponible. El servidor opera en modo 100% autónomo local:", e);
     }
   } else {
-    console.warn("ADVERTENCIA: firebase-applet-config.json no existe. El servidor funcionará en modo offline local.");
+    console.log("Modo 100% autónomo: Servidor local operando como base de datos central sin servicios externos.");
   }
 
-  // Helper para obtener y sincronizar el estado/saldo actual de Firestore (o usar valor de respaldo)
-  async function getAndUpdateBalance(): Promise<number> {
-    let parsedState: any = null;
-    let isFromFirestore = false;
+  // Función auxiliar para parsear marcas de tiempo
+  const getMsFromTimestamp = (val: any): number => {
+    if (!val) return 0;
+    if (typeof val === "number") return val;
+    if (typeof val === "string") {
+      const parsed = Date.parse(val);
+      return isNaN(parsed) ? 0 : parsed;
+    }
+    if (typeof val.toMillis === "function") {
+      return val.toMillis();
+    }
+    if (typeof val.seconds === "number") {
+      return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1000000);
+    }
+    if (val instanceof Date) {
+      return val.getTime();
+    }
+    return 0;
+  };
 
-    // 1. Intentar cargar desde Firestore
-    if (dbFirebase) {
+  // Helper central para obtener y actualizar el estado completo (catch-up y persistencia)
+  async function getAndUpdateFullState(): Promise<any> {
+    // 1. Cargar estado local en disco (servidor autoritativo)
+    let parsedState: any = loadLocalState();
+
+    // 2. Si no hay estado local pero hay Firestore, intentar cargar réplica
+    if (!parsedState && dbFirebase) {
       try {
         const docRef = doc(dbFirebase, "parkingStates", "global");
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           parsedState = docSnap.data();
-          isFromFirestore = true;
         }
       } catch (err) {
-        console.error("Error al obtener estado de Firestore:", err);
-      }
-    }
-    
-    // 2. Si no hay Firestore o falló, intentar desde el respaldo local
-    const fallbackPath = path.join(process.cwd(), "local-parking-state.json");
-    if (!parsedState && fs.existsSync(fallbackPath)) {
-      try {
-        const raw = fs.readFileSync(fallbackPath, "utf8");
-        parsedState = JSON.parse(raw);
-      } catch (e) {
-        console.error("Error al leer archivo local-parking-state.json:", e);
+        console.warn("No se pudo consultar Firestore, usando valores iniciales locales.");
       }
     }
 
-    // 3. Si no hay estado en ningún lado, usar valores por defecto
+    // 3. Si no hay estado previo, inicializar valores por defecto
     if (!parsedState) {
       parsedState = {
-        balance: 5.0,
+        balance: 0.0,
         isActive: false,
         currentSessionId: null,
         history: [],
-        totalDeposits: 5.0,
+        totalDeposits: 0.0,
         totalSpent: 0,
         speedMultiplier: 1,
+        hourlyRate: 0.10,
         halfHourRate: 0.10,
+        lastSavedTime: Date.now(),
       };
+      saveLocalStateAtomically(parsedState);
     }
 
-    // Función auxiliar para parsear timestamps de Firestore robustamente
-    const getMsFromTimestamp = (val: any): number => {
-      if (!val) return 0;
-      if (typeof val === "number") return val;
-      if (typeof val === "string") {
-        const parsed = Date.parse(val);
-        return isNaN(parsed) ? 0 : parsed;
-      }
-      if (typeof val.toMillis === "function") {
-        return val.toMillis();
-      }
-      if (typeof val.seconds === "number") {
-        return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1000000);
-      }
-      if (val instanceof Date) {
-        return val.getTime();
-      }
-      return 0;
-    };
-
-    // 4. Procesar catch-up de tiempo transcurrido si está estacionado (isActive === true)
+    // 4. Procesar cálculo de tiempo transcurrido (catch-up) si hay sesión activa
     if (parsedState.isActive && parsedState.currentSessionId && parsedState.lastSavedTime) {
       const lastSavedMs = getMsFromTimestamp(parsedState.lastSavedTime);
-      const elapsedRealMs = Date.now() - lastSavedMs;
+      const now = Date.now();
+      const elapsedRealMs = now - lastSavedMs;
       if (elapsedRealMs > 0) {
         const speed = parsedState.speedMultiplier || 1;
         const simDeltaMs = elapsedRealMs * speed;
         const halfHourRate = parsedState.halfHourRate ?? parsedState.hourlyRate ?? 0.10;
-        
         let offlineCost = 0;
 
         const updatedHistory = (parsedState.history || []).map((s: any) => {
@@ -144,40 +201,120 @@ async function startServer() {
           return s;
         });
 
-        let finalState = {
+        parsedState = {
           ...parsedState,
           balance: parsedState.balance - offlineCost,
           history: updatedHistory,
           totalSpent: (parsedState.totalSpent || 0) + offlineCost,
-          lastSavedTime: Date.now(),
+          lastSavedTime: now,
         };
 
-        parsedState = finalState;
+        // Guardar atómicamente en disco local
+        saveLocalStateAtomically(parsedState);
 
-        // 5. Guardar el estado actualizado de vuelta a la base de datos o archivo local
-        if (isFromFirestore && dbFirebase) {
+        // Replicar en Firestore si está disponible
+        if (dbFirebase) {
           try {
             const docRef = doc(dbFirebase, "parkingStates", "global");
-            await setDoc(docRef, parsedState);
-            console.log("Estado de estacionamiento catch-up guardado en Firestore.");
-          } catch (err) {
-            console.error("Error al guardar estado catch-up en Firestore:", err);
-          }
+            setDoc(docRef, parsedState).catch(() => {});
+          } catch {}
         }
-        
-        // Guardar siempre una copia local por seguridad
-        try {
-          fs.writeFileSync(fallbackPath, JSON.stringify(parsedState, null, 2), "utf8");
-        } catch (e) {
-          console.error("Error al guardar respaldo de estado local:", e);
-        }
+
+        // Emitir a todos los clientes SSE conectados
+        broadcastState(parsedState);
       }
     }
 
-    return parsedState.balance;
+    return parsedState;
   }
 
-  // Endpoint 1: Retorna un JSON con el saldo y su formato (o texto plano si se especifica ?text=true)
+  async function getAndUpdateBalance(): Promise<number> {
+    const state = await getAndUpdateFullState();
+    return typeof state.balance === "number" ? state.balance : 0;
+  }
+
+  // --- Endpoints de Estado Central y SSE ---
+
+  // Endpoint de Eventos en Tiempo Real (Server-Sent Events)
+  app.get("/api/events", async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    if (typeof (res as any).flushHeaders === "function") {
+      (res as any).flushHeaders();
+    }
+
+    // Enviar estado actual de inmediato al conectar
+    try {
+      const currentState = await getAndUpdateFullState();
+      res.write(`data: ${JSON.stringify(currentState)}\n\n`);
+    } catch (e) {
+      console.error("Error enviando estado inicial SSE:", e);
+    }
+
+    sseClients.add(res);
+
+    req.on("close", () => {
+      sseClients.delete(res);
+    });
+  });
+
+  // Keepalive periódico cada 20 segundos para mantener vivas las conexiones SSE
+  setInterval(() => {
+    for (const client of sseClients) {
+      try {
+        client.write(": keepalive\n\n");
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }, 20000);
+
+  // Obtener estado completo
+  app.get("/api/state", async (req, res) => {
+    try {
+      const state = await getAndUpdateFullState();
+      res.status(200).json({ status: "success", data: state });
+    } catch (err) {
+      res.status(500).json({ status: "error", error: "Error al obtener estado local" });
+    }
+  });
+
+  // Guardar estado completo desde el frontend (acciones de usuario)
+  app.post("/api/state", async (req, res) => {
+    try {
+      const incomingState = req.body;
+      if (!incomingState || typeof incomingState !== "object") {
+        return res.status(400).json({ status: "error", message: "Cuerpo de estado inválido" });
+      }
+
+      const updatedState = {
+        ...incomingState,
+        lastSavedTime: Date.now(),
+      };
+
+      // 1. Guardar de forma atómica en el almacenamiento local del servidor
+      saveLocalStateAtomically(updatedState);
+
+      // 2. Replicar en Firestore en segundo plano si está disponible
+      if (dbFirebase) {
+        try {
+          const docRef = doc(dbFirebase, "parkingStates", "global");
+          setDoc(docRef, updatedState).catch((e: any) => console.warn("Aviso réplica Firestore:", e?.message));
+        } catch {}
+      }
+
+      // 3. Notificar a todas las pantallas/pestañas conectadas en tiempo real
+      broadcastState(updatedState);
+
+      res.status(200).json({ status: "success", data: updatedState });
+    } catch (err) {
+      console.error("Error guardando estado:", err);
+      res.status(500).json({ status: "error", error: "Error interno al guardar estado local" });
+    }
+  });
+
+  // Endpoint 1: Retorna un JSON con el saldo y su formato (o texto plano si ?text=true)
   app.get("/saldo", async (req, res) => {
     try {
       const balance = await getAndUpdateBalance();
@@ -228,67 +365,9 @@ async function startServer() {
         });
       }
 
-      // 1. Cargar estado actual
-      let parsedState: any = null;
-      let isFromFirestore = false;
-
-      if (dbFirebase) {
-        try {
-          const docRef = doc(dbFirebase, "parkingStates", "global");
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            parsedState = docSnap.data();
-            isFromFirestore = true;
-          }
-        } catch (err) {
-          console.error("Error al obtener estado de Firestore en set-saldo:", err);
-        }
-      }
-
-      const fallbackPath = path.join(process.cwd(), "local-parking-state.json");
-      if (!parsedState && fs.existsSync(fallbackPath)) {
-        try {
-          const raw = fs.readFileSync(fallbackPath, "utf8");
-          parsedState = JSON.parse(raw);
-        } catch (e) {
-          console.error("Error al leer archivo local-parking-state.json:", e);
-        }
-      }
-
-      if (!parsedState) {
-        parsedState = {
-          balance: 0,
-          isActive: false,
-          currentSessionId: null,
-          history: [],
-          totalDeposits: 0,
-          totalSpent: 0,
-          speedMultiplier: 1,
-          halfHourRate: 0.10,
-        };
-      }
-
+      // 1. Obtener estado actual consolidado
+      let parsedState = await getAndUpdateFullState();
       const now = Date.now();
-
-      // Función auxiliar interna para parsear timestamps
-      const getMsFromTimestamp = (val: any): number => {
-        if (!val) return 0;
-        if (typeof val === "number") return val;
-        if (typeof val === "string") {
-          const parsed = Date.parse(val);
-          return isNaN(parsed) ? 0 : parsed;
-        }
-        if (typeof val.toMillis === "function") {
-          return val.toMillis();
-        }
-        if (typeof val.seconds === "number") {
-          return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1000000);
-        }
-        if (val instanceof Date) {
-          return val.getTime();
-        }
-        return 0;
-      };
 
       if (isNewMessage) {
         // Cancelar / pausar la sesión de parqueo actual
@@ -327,24 +406,23 @@ async function startServer() {
 
         parsedState.lastSavedTime = now;
 
-        // Guardar
-        if (isFromFirestore && dbFirebase) {
+        // Guardar atómicamente en disco local
+        saveLocalStateAtomically(parsedState);
+
+        // Replicar en Firestore
+        if (dbFirebase) {
           try {
             const docRef = doc(dbFirebase, "parkingStates", "global");
-            await setDoc(docRef, parsedState);
-          } catch (err) {
-            console.error("Error al guardar en Firestore para comando 'new':", err);
-          }
+            setDoc(docRef, parsedState).catch(() => {});
+          } catch {}
         }
-        try {
-          fs.writeFileSync(fallbackPath, JSON.stringify(parsedState, null, 2), "utf8");
-        } catch (e) {
-          console.error("Error al guardar local-parking-state.json para comando 'new':", e);
-        }
+
+        // Notificar en tiempo real a clientes
+        broadcastState(parsedState);
 
         return res.status(200).json({
           status: "success",
-          message: "Sesión de parqueo cancelada con éxito mediante mensaje 'new'.",
+          message: "Sesión de parqueo cancelada con éxito mediante comando 'new'.",
           data: {
             balance: parseFloat(parsedState.balance.toFixed(2)),
             isActive: parsedState.isActive,
@@ -399,7 +477,7 @@ async function startServer() {
       }
       parsedState.balance = newBalance;
 
-      // 4. Iniciar automáticamente una nueva sesión de parqueo si NO hay una sesión activa y el saldo es mayor a 0
+      // 4. Iniciar automáticamente una nueva sesión de parqueo si NO hay sesión activa y el saldo es mayor a 0
       if (!parsedState.isActive && newBalance > 0) {
         const sessionId = `session-${now}`;
         const newSession = {
@@ -419,24 +497,20 @@ async function startServer() {
 
       parsedState.lastSavedTime = now;
 
-      // 5. Guardar estado actualizado en Firestore y archivo local de respaldo
-      if (isFromFirestore && dbFirebase) {
+      // 5. Guardar estado actualizado en el almacenamiento atómico del servidor
+      saveLocalStateAtomically(parsedState);
+
+      // Replicar en Firestore
+      if (dbFirebase) {
         try {
           const docRef = doc(dbFirebase, "parkingStates", "global");
-          await setDoc(docRef, parsedState);
-          console.log("Nuevo saldo y sesión activa guardados en Firestore correctamente.");
-        } catch (err) {
-          console.error("Error al guardar nuevo estado en Firestore:", err);
-        }
+          setDoc(docRef, parsedState).catch(() => {});
+        } catch {}
       }
 
-      try {
-        fs.writeFileSync(fallbackPath, JSON.stringify(parsedState, null, 2), "utf8");
-      } catch (e) {
-        console.error("Error al guardar respaldo local del nuevo estado:", e);
-      }
+      // Notificar a todos los navegadores conectados en tiempo real
+      broadcastState(parsedState);
 
-      // Devolver respuesta estructurada
       return res.status(200).json({
         status: "success",
         message: newBalance > 0 
@@ -467,7 +541,7 @@ async function startServer() {
   app.get("/api/new", handleSetSaldoRequest);
   app.get("/new", handleSetSaldoRequest);
 
-  // Interceptar la raíz "/" si se pide saldo explícitamente, si es una herramienta de terminal (cURL/wget) o JSON Header
+  // Interceptar la raíz "/" si se pide saldo explícitamente, cURL/wget o JSON Header
   app.get("/", async (req, res, next) => {
     const userAgent = (req.headers["user-agent"] || "").toLowerCase();
     const isCommandLine = userAgent.includes("curl") || userAgent.includes("wget") || userAgent.includes("httpie");
@@ -476,7 +550,6 @@ async function startServer() {
       try {
         const balance = await getAndUpdateBalance();
         
-        // Si es curl/wget y no pide explícitamente JSON, devolvemos texto plano para comodidad en terminal
         if (isCommandLine && req.query.json === undefined && req.headers.accept !== "application/json") {
           res.setHeader("Content-Type", "text/plain");
           return res.status(200).send(balance.toFixed(2));
@@ -515,8 +588,9 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Servidor de Parkflow Pro corriendo en http://localhost:${PORT}`);
+    console.log(`Servidor de IA Parqueadero corriendo en http://localhost:${PORT}`);
     console.log(`Endpoint de saldo disponible en: http://localhost:${PORT}/saldo`);
+    console.log(`Almacenamiento persistente centralizado en: ${PRIMARY_LOCAL_FILE}`);
   });
 }
 
