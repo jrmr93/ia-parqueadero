@@ -142,6 +142,7 @@ export default function App() {
   // Real-time listener for remote changes (e.g. from the API / set-saldo url)
   useEffect(() => {
     const unsubscribe = subscribeParkingState((remoteState) => {
+      setDbSynced(true);
       setState((current) => {
         const remoteSavedTime = remoteState.lastSavedTime || 0;
         const currentSavedTime = current.lastSavedTime || 0;
